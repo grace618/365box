@@ -1,0 +1,16 @@
+services:
+  box:
+    build: .
+    container_name: 365box
+    restart: unless-stopped
+    ports:
+      - "3002:3002"
+    environment:
+      HOST: "0.0.0.0"
+      PORT: "3002"
+      WEB_DIST: "/app/web/dist"
+    volumes:
+      - box-data:/app/server/data
+
+volumes:
+  box-data:

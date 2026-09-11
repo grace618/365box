@@ -14,24 +14,53 @@ npm run dev
 - Web: http://127.0.0.1:5173
 - API / MCP: 启动后终端会打印本机和局域网地址
 
-对面 MCP 一般要填**局域网 IP**（不要用 127.0.0.1），例如：
+对面 MCP 一般要填**局域网 IP**（不要用 127.0.0.1），例如本机开发：
 
 ```text
-http://192.168.3.101:3001/mcp
+http://192.168.3.101:3002/mcp
 ```
+
+若连 Docker 部署机，用服务器 IP（见下方「Docker 部署」）。
 
 换电脑 / 换 Wi‑Fi 后 IP 会变：看启动日志里的「局域网 MCP」，或改 `mcp-config.example.json` 里的 `url`。
 
-也可分别 `npm run server` / `npm run web`。端口被占用时换掉占用进程，或设 `PORT=3002`。只要本机、不要局域网时：`HOST=127.0.0.1 npm run server`。
+也可分别 `npm run server` / `npm run web`。默认 API/MCP 端口是 **3002**；被占用时换掉占用进程，或设 `PORT=其它端口`。只要本机、不要局域网时：`HOST=127.0.0.1 npm run server`。
 
 首次启动会自动创建 SQLite（`server/data/`，已被 gitignore）。
 
-## MCP 怎么接
+## Docker 部署
 
-地址示例（以你电脑当前局域网 IP 为准，启动日志会打印）：
+机器上已装 Docker 时：
+
+```bash
+docker compose up -d --build
+```
+
+常用命令：
+
+```bash
+docker compose logs -f      # 看日志
+docker compose restart      # 重启
+docker compose down         # 停止并移除容器（数据卷默认保留）
+```
+
+- Web / API / MCP 同一端口：`http://服务器IP:3002`
+- MCP：`http://服务器IP:3002/mcp`
+- 数据卷：`box-data`（SQLite 持久化，`down` 不会删卷）
+
+当前已部署示例机：
 
 ```text
-http://192.168.3.101:3001/mcp
+网页：http://192.168.3.24:3002/
+MCP： http://192.168.3.24:3002/mcp
+```
+
+## MCP 怎么接
+
+地址示例（以实际服务所在机器局域网 IP 为准；本机开发看启动日志「局域网 MCP」，Docker 服务器见上）：
+
+```text
+http://192.168.3.24:3002/mcp
 ```
 
 对接方连上后，对面 AI 会看到（操作手册，不是长 API 罗列）：

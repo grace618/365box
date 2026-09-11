@@ -1,0 +1,17 @@
+node_modules
+**/node_modules
+server/data
+*.db
+*.db-*
+.git
+.DS_Store
+web/dist
+*.log
+.vite
+**/*.tsbuildinfo
+.env
+.env.*
+README.md
+install.sh
+install.bat
+mcp-config.example.json

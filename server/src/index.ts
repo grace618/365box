@@ -1,7 +1,10 @@
 import express from "express";
 import cors from "cors";
 import { randomUUID } from "node:crypto";
+import fs from "node:fs";
 import os from "node:os";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { StreamableHTTPServerTransport } from "@modelcontextprotocol/sdk/server/streamableHttp.js";
 import { isInitializeRequest } from "@modelcontextprotocol/sdk/types.js";
@@ -23,7 +26,7 @@ import { MCP_INSTRUCTIONS } from "./mcp-docs.js";
 
 /** 默认 0.0.0.0，方便 MCP 客户端用局域网 IP 连接；只要本机可用 HOST=127.0.0.1 */
 const HOST = process.env.HOST ?? "0.0.0.0";
-const PORT = Number(process.env.PORT ?? 3001);
+const PORT = Number(process.env.PORT ?? 3002);
 
 function lanIPv4Addresses() {
   const result: string[] = [];
@@ -416,6 +419,16 @@ app.delete("/mcp", async (req, res) => {
   sessions.delete(sessionId);
   res.status(204).end();
 });
+
+const webDist =
+  process.env.WEB_DIST ??
+  path.join(path.dirname(fileURLToPath(import.meta.url)), "../../web/dist");
+if (fs.existsSync(webDist)) {
+  app.use(express.static(webDist));
+  app.get(/^(?!\/api(?:\/|$)|\/mcp(?:\/|$)).*/, (_req, res) => {
+    res.sendFile(path.join(webDist, "index.html"));
+  });
+}
 
 app.listen(PORT, HOST, () => {
   const lans = lanIPv4Addresses();
