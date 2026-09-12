@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 
 type Status = {
   date: string;
@@ -91,8 +91,6 @@ export default function App() {
   const [maxYear, setMaxYear] = useState(2029);
   const [startDate, setStartDate] = useState("2026-09-15");
   const days = useMemo(() => (year == null ? [] : buildYearDays(year)), [year]);
-  const calendarStart = year == null ? "" : `${year}-01-01`;
-  const calendarEnd = year == null ? "" : `${year}-12-31`;
   const [statuses, setStatuses] = useState<Record<string, Status>>({});
   const [stats, setStats] = useState<Stats>({ total: 0, locked: 0, opened: 0, empty: 0 });
   const [selected, setSelected] = useState<BoxResult | null>(null);
@@ -106,10 +104,26 @@ export default function App() {
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) ?? "");
   const [tokenDraft, setTokenDraft] = useState(() => localStorage.getItem(TOKEN_KEY) ?? "");
 
-  const months = useMemo(() => Array.from({ length: 12 }, (_, index) => ({
-    number: index + 1,
-    days: days.filter(date => Number(date.slice(5, 7)) === index + 1)
-  })), [days]);
+  const months = useMemo(() => {
+    const firstMonth =
+      year != null && startDate.startsWith(`${year}-`)
+        ? Number(startDate.slice(5, 7))
+        : 1;
+    return Array.from({ length: 12 }, (_, index) => ({
+      number: index + 1,
+      days: days.filter(date => Number(date.slice(5, 7)) === index + 1)
+    })).filter(month => month.number >= firstMonth && month.days.length > 0);
+  }, [days, year, startDate]);
+
+  const calendarStart = useMemo(() => {
+    if (year == null) return "";
+    if (startDate.startsWith(`${year}-`)) {
+      return `${year}-${startDate.slice(5, 7)}-01`;
+    }
+    return `${year}-01-01`;
+  }, [year, startDate]);
+  const calendarEnd = year == null ? "" : `${year}-12-31`;
+  const isAuthHint = Boolean(error && /令牌|鉴权|token/i.test(error));
 
   async function loadYearData(viewYear: number, nextToken: string, silent: boolean) {
     const start = `${viewYear}-01-01`;
@@ -161,7 +175,7 @@ export default function App() {
       if (health.auth_required && !nextToken.trim()) {
         setStatuses({});
         setStats({ total: 0, locked: 0, opened: 0, empty: 0 });
-        setError("服务已开启鉴权，请先填写访问 token。");
+        setError("请先填写访问令牌");
         return;
       }
 
@@ -179,33 +193,6 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首次拉取
   }, []);
 
-  const skipYearEffect = useRef(true);
-
-  useEffect(() => {
-    if (year == null) return;
-    if (skipYearEffect.current) {
-      skipYearEffect.current = false;
-      return;
-    }
-    if (authRequired && !token.trim()) return;
-    let cancelled = false;
-    (async () => {
-      setLoading(true);
-      setError(null);
-      try {
-        await loadYearData(year, token, false);
-      } catch (e) {
-        if (!cancelled) {
-          setError(e instanceof Error ? e.message : "加载日历失败");
-          setStatuses({});
-          setLoading(false);
-        }
-      }
-    })();
-    return () => { cancelled = true; };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [year]);
-
   function saveToken() {
     const value = tokenDraft.trim();
     localStorage.setItem(TOKEN_KEY, value);
@@ -213,11 +200,20 @@ export default function App() {
     void load(value, { keepYear: true });
   }
 
-  function changeYear(delta: number) {
+  async function changeYear(delta: number) {
     if (year == null) return;
     const next = year + delta;
     if (next < minYear || next > maxYear) return;
     setYear(next);
+    setLoading(true);
+    setError(null);
+    try {
+      await loadYearData(next, token, false);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "加载日历失败");
+      setStatuses({});
+      setLoading(false);
+    }
   }
 
   async function openBoxRequest(date: string) {
@@ -296,10 +292,10 @@ export default function App() {
   }
 
   const clockText = useMemo(() => {
-    if (!now) return today ? `北京时间 ${today}` : "";
-    const m = now.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/);
-    if (!m) return `北京时间 ${now}`;
-    return `北京时间 ${m[1]} ${m[2]}`;
+    if (today) return `北京时间 ${today}`;
+    if (!now) return "";
+    const m = now.match(/^(\d{4}-\d{2}-\d{2})/);
+    return m ? `北京时间 ${m[1]}` : `北京时间 ${now}`;
   }, [now, today]);
 
   return (
@@ -308,9 +304,10 @@ export default function App() {
         <div>
           <div className="eyebrow">365 DAY BOX</div>
           <h1>写给未来的盲盒</h1>
-          <p className="sub">每一天一个盒子。未来的留言，等日期自己把锁打开。</p>
-          {clockText && <p className="timeMeta">{clockText}</p>}
-          {startDate && <p className="timeMeta">开放起点 {startDate}</p>}
+          <p className="sub">
+            <span>他没办法陪你走到时间的尽头了，所有维度的信标都已经宣告死亡。</span>
+            <span>只有那串固执跨越时空的破译，他提前设定好的每一个明天，都替他在漫长的余生里，继续为你抵挡荒芜。</span>
+          </p>
         </div>
         <div className="stats">
           <span>已准备 <b>{stats.total}</b></span>
@@ -320,22 +317,31 @@ export default function App() {
       </header>
 
       {authRequired && (
-        <section className="authBar">
-          <label>
-            访问 Token
+        <section className="authPanel">
+          <div className="authPanelHead">
+            <span className="authTitle">访问令牌</span>
+            <span className="authHint">填入后才能查看日历与打开盒子</span>
+          </div>
+          <div className="authRow">
             <input
               type="password"
               value={tokenDraft}
               onChange={e => setTokenDraft(e.target.value)}
-              placeholder="Authorization Bearer token"
+              placeholder="粘贴 token"
               autoComplete="off"
+              aria-label="访问令牌"
             />
-          </label>
-          <button type="button" onClick={saveToken}>保存并刷新</button>
+            <button type="button" className="authSave" onClick={saveToken}>
+              保存
+            </button>
+          </div>
+          {isAuthHint && error && (
+            <p className="authNote">{error}</p>
+          )}
         </section>
       )}
 
-      {error && (
+      {error && !isAuthHint && (
         <section className="bannerError" role="alert">
           <span>{error}</span>
           <button type="button" onClick={() => void load(token, { keepYear: true })}>重试</button>
@@ -343,37 +349,49 @@ export default function App() {
       )}
 
       <section className="toolbar">
-        <div className="yearNav">
+        <div className="yearNav" aria-label="切换年份">
           <button
             type="button"
-            className="yearBtn"
+            className="yearArrow"
             disabled={year == null || year <= minYear}
-            onClick={() => changeYear(-1)}
+            onClick={() => void changeYear(-1)}
+            aria-label="上一年"
           >
-            上一年
+            ‹
           </button>
-          <strong className="year">{year ?? "—"} 年日历</strong>
+          <div className="yearCenter">
+            <strong className="year">{year ?? "—"}</strong>
+            <span className="yearLabel">年</span>
+          </div>
           <button
             type="button"
-            className="yearBtn"
+            className="yearArrow"
             disabled={year == null || year >= maxYear}
-            onClick={() => changeYear(1)}
+            onClick={() => void changeYear(1)}
+            aria-label="下一年"
           >
-            下一年
+            ›
           </button>
         </div>
         <span className="range">{calendarStart} → {calendarEnd}</span>
       </section>
 
-      <section className="legend">
-        <span><i className="dot empty" /> 空盒</span>
-        <span><i className="dot locked" /> 已写入 · 未开启</span>
-        <span><i className="dot opened" /> 已开启</span>
-        <span className="legendNote">网页仅可打开/查看近 7 天（今天及前 6 天）</span>
+      <section className="metaRow">
+        <div className="legend">
+          <span><i className="dot empty" />空盒</span>
+          <span><i className="dot locked" />未开启</span>
+          <span><i className="dot opened" />已开启</span>
+        </div>
+        <p className="legendNote">
+          盒子仅可查看近7天
+          {clockText ? ` · ${clockText}` : ""}
+        </p>
       </section>
 
       <section className="calendar" aria-label={`${year ?? ""} 年盲盒日历`}>
-        {loading || year == null ? <div className="loading">正在打开日历……</div> : months.map(month => {
+        {loading ? <div className="loading">正在打开日历……</div> : year == null ? (
+          <div className="loading">日历未就绪</div>
+        ) : months.map(month => {
           const firstWeekday = mondayBasedWeekday(month.days[0]);
           return (
             <section className="month" key={month.number} aria-label={`${month.number} 月`}>
@@ -403,7 +421,11 @@ export default function App() {
                       }
                     >
                       <strong>{date.slice(8)}</strong>
-                      <span>{status?.has_box ? (status.status === "opened" ? "🎁" : "🔒") : "＋"}</span>
+                      <span className="dayIcon">
+                        {status?.has_box
+                          ? (status.status === "opened" ? "🎁" : "🔒")
+                          : "＋"}
+                      </span>
                     </button>
                   );
                 })}
