@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Status = {
   date: string;
@@ -103,6 +103,8 @@ export default function App() {
   const [authRequired, setAuthRequired] = useState(false);
   const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) ?? "");
   const [tokenDraft, setTokenDraft] = useState(() => localStorage.getItem(TOKEN_KEY) ?? "");
+  const [editToken, setEditToken] = useState(false);
+  const authBlockRef = useRef<HTMLDivElement | null>(null);
 
   const months = useMemo(() => {
     const firstMonth =
@@ -124,6 +126,9 @@ export default function App() {
   }, [year, startDate]);
   const calendarEnd = year == null ? "" : `${year}-12-31`;
   const isAuthHint = Boolean(error && /令牌|鉴权|token/i.test(error));
+  const needsAuthUi = authRequired || import.meta.env.DEV;
+  const hasToken = Boolean(token.trim());
+  const showAuthForm = needsAuthUi && (editToken || !hasToken || isAuthHint);
 
   async function loadYearData(viewYear: number, nextToken: string, silent: boolean) {
     const start = `${viewYear}-01-01`;
@@ -193,10 +198,22 @@ export default function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首次拉取
   }, []);
 
+  useEffect(() => {
+    if (!showAuthForm) return;
+    function onPointerDown(event: PointerEvent) {
+      const node = event.target as Node | null;
+      if (node && authBlockRef.current?.contains(node)) return;
+      setEditToken(false);
+    }
+    document.addEventListener("pointerdown", onPointerDown);
+    return () => document.removeEventListener("pointerdown", onPointerDown);
+  }, [showAuthForm]);
+
   function saveToken() {
     const value = tokenDraft.trim();
     localStorage.setItem(TOKEN_KEY, value);
     setToken(value);
+    setEditToken(false);
     void load(value, { keepYear: true });
   }
 
@@ -309,37 +326,68 @@ export default function App() {
             <span>只有那串固执跨越时空的破译，他提前设定好的每一个明天，都替他在漫长的余生里，继续为你抵挡荒芜。</span>
           </p>
         </div>
-        <div className="stats">
-          <span>已准备 <b>{stats.total}</b></span>
-          <span>已开启 <b>{stats.opened}</b></span>
-          <span>空盒 <b>{stats.empty}</b></span>
+        <div className="headerSide">
+          <div className="stats">
+            <span>已准备 <b>{stats.total}</b></span>
+            <span>已开启 <b>{stats.opened}</b></span>
+            <span>空盒 <b>{stats.empty}</b></span>
+          </div>
+          {needsAuthUi && (
+            <div className="authBlock" ref={authBlockRef}>
+              <button
+                type="button"
+                className="authIconBtn"
+                onClick={() => setEditToken(open => !open)}
+                aria-label={showAuthForm ? "收起令牌输入" : "更换令牌"}
+              >
+                <svg className="authKeyIcon" viewBox="0 0 24 24" aria-hidden="true">
+                  <path
+                    fill="currentColor"
+                    d="M14.5 3a5.5 5.5 0 0 0-5.3 6.9L3 16.1V21h4.9l1.7-1.7.9.9 1.4-1.4-.9-.9 1.1-1.1.9.9 1.4-1.4-.9-.9 2.1-2.1A5.5 5.5 0 1 0 14.5 3Zm0 2a3.5 3.5 0 1 1 0 7 3.5 3.5 0 0 1 0-7Zm1 2a1.5 1.5 0 1 0 0 3 1.5 1.5 0 0 0 0-3Z"
+                  />
+                </svg>
+                {!showAuthForm && <span className="authDotTip">更换令牌</span>}
+              </button>
+              {showAuthForm && (
+                <section className="authPanel">
+                  <div className="authPanelHead">
+                    <span className="authTitle">访问令牌</span>
+                    <span className="authHint">
+                      {authRequired
+                        ? "查看与开盒需要"
+                        : (import.meta.env.DEV ? "本地调试预览" : null)}
+                      {hasToken && (
+                        <button type="button" className="authLink" onClick={() => setEditToken(false)}>
+                          收起
+                        </button>
+                      )}
+                    </span>
+                  </div>
+                  <div className="authRow">
+                    <input
+                      type="password"
+                      value={tokenDraft}
+                      onChange={e => setTokenDraft(e.target.value)}
+                      onKeyDown={e => {
+                        if (e.key === "Enter") saveToken();
+                      }}
+                      placeholder="粘贴 token"
+                      autoComplete="off"
+                      aria-label="访问令牌"
+                    />
+                    <button type="button" className="authSave" onClick={saveToken}>
+                      保存
+                    </button>
+                  </div>
+                  {isAuthHint && error && (
+                    <p className="authNote">{error}</p>
+                  )}
+                </section>
+              )}
+            </div>
+          )}
         </div>
       </header>
-
-      {authRequired && (
-        <section className="authPanel">
-          <div className="authPanelHead">
-            <span className="authTitle">访问令牌</span>
-            <span className="authHint">填入后才能查看日历与打开盒子</span>
-          </div>
-          <div className="authRow">
-            <input
-              type="password"
-              value={tokenDraft}
-              onChange={e => setTokenDraft(e.target.value)}
-              placeholder="粘贴 token"
-              autoComplete="off"
-              aria-label="访问令牌"
-            />
-            <button type="button" className="authSave" onClick={saveToken}>
-              保存
-            </button>
-          </div>
-          {isAuthHint && error && (
-            <p className="authNote">{error}</p>
-          )}
-        </section>
-      )}
 
       {error && !isAuthHint && (
         <section className="bannerError" role="alert">
