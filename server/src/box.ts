@@ -137,10 +137,12 @@ export function openBox(date: string) {
 }
 
 export function calendarStatus(startDate?: string, endDate?: string) {
-  const boxes = listBoxes();
   const start = startDate ?? todayBeijingDate();
   const end = endDate ?? start;
+  if (!isValidDate(start) || !isValidDate(end)) throw new Error("INVALID_DATE");
+  if (start > end) throw new Error("DATE_RANGE_INVALID");
 
+  const boxes = listBoxes();
   return boxes
     .filter(b => b.date >= start && b.date <= end)
     .map(b => ({
@@ -169,6 +171,8 @@ export function getStats() {
 
 /** 指定日期范围内的统计（给 calendar_status 用，避免和查询范围脱节） */
 export function getRangeStats(startDate: string, endDate: string) {
+  if (!isValidDate(startDate) || !isValidDate(endDate)) throw new Error("INVALID_DATE");
+  if (startDate > endDate) throw new Error("DATE_RANGE_INVALID");
   const boxes = listBoxes().filter(b => b.date >= startDate && b.date <= endDate);
   return {
     start_date: startDate,

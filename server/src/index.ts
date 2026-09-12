@@ -59,8 +59,12 @@ app.use(cors({
 }));
 app.use(express.json());
 
+function errorCode(error: unknown) {
+  return error instanceof Error ? error.message : String(error);
+}
+
 function errorMessage(error: unknown) {
-  const code = error instanceof Error ? error.message : String(error);
+  const code = errorCode(error);
   const messages: Record<string, string> = {
     INVALID_DATE: "日期格式必须是 YYYY-MM-DD，且必须是真实存在的日历日",
     DATE_YEAR_INVALID: `只能创建 ${TARGET_YEAR} 年的盒子`,
@@ -68,9 +72,20 @@ function errorMessage(error: unknown) {
     CONTENT_REQUIRED: "盒子内容不能为空",
     BOX_ALREADY_EXISTS: "这个日期已经有盒子了",
     BOX_NOT_FOUND: "这个日期没有盒子",
-    BOX_ALREADY_OPENED: "盒子已经打开，不能修改"
+    BOX_ALREADY_OPENED: "盒子已经打开，不能修改",
+    DATE_RANGE_INVALID: "开始日期不能晚于结束日期，请交换 start_date / end_date"
   };
   return messages[code] ?? code;
+}
+
+/** 失败条目：给人看的 error + 机器用的 code（与 HTTP API 一致） */
+function failResult(date: string, error: unknown) {
+  return {
+    date,
+    ok: false as const,
+    error: errorMessage(error),
+    code: errorCode(error)
+  };
 }
 
 function textJson(data: unknown) {
@@ -83,11 +98,10 @@ function textJson(data: unknown) {
 }
 
 function sendApiError(res: express.Response, error: unknown, status = 400) {
-  const code = error instanceof Error ? error.message : String(error);
   res.status(status).json({
     ok: false,
     error: errorMessage(error),
-    code
+    code: errorCode(error)
   });
 }
 
@@ -159,21 +173,21 @@ ${MCP_INSTRUCTIONS}
 
   server.tool(
     "create_box",
-    `往 ${TARGET_YEAR} 年今天或未来的空日期批量写入新盲盒。一次传入多个不同日期更好。不能创建过去/非法日历日/非 ${TARGET_YEAR} 年的日期；已有盒子不会覆盖（要改用 update_box）。入参 boxes:[{date,content,prompt?}]。出参 {results:[...]}。`,
+    `往 ${TARGET_YEAR} 年今天或未来的空日期批量写入新盲盒。content=留言正文（必填）；prompt=可选创作方向/备注（不传也行，开盒时会原样返回，不影响解锁）。不能创建过去/非法日/非 ${TARGET_YEAR} 年；已有盒子不覆盖（改用 update_box）。出参 {results:[...]}，某条不合格只影响该条。`,
     {
       boxes: z.array(z.object({
         date: z.string().describe(`${TARGET_YEAR} 年今天或未来的真实日历日 YYYY-MM-DD，建议先 next_empty_dates`),
-        content: z.string().describe("留言正文，必填"),
-        prompt: z.string().optional().describe("可选，给创作用的提示词")
+        content: z.string().nullish().describe("留言正文，必填；给到日打开的人看；缺了只让该条失败"),
+        prompt: z.string().optional().describe("可选创作方向/备注；不传完全可以；存库，开盒时随 content 返回，不参与解锁")
       })).min(1).describe("要新建的盒子列表")
     },
     async ({ boxes }) => {
       const results = boxes.map(item => {
         try {
-          const box = createBoxSafe(item.date, item.content, item.prompt);
+          const box = createBoxSafe(item.date, item.content ?? "", item.prompt);
           return { date: box.date, ok: true as const, status: "locked" as const };
         } catch (error) {
-          return { date: item.date, ok: false as const, error: errorMessage(error) };
+          return failResult(item.date, error);
         }
       });
       return textJson({ results });
@@ -182,21 +196,21 @@ ${MCP_INSTRUCTIONS}
 
   server.tool(
     "update_box",
-    "批量修改尚未打开的盲盒。content 必填。不存在或已打开会失败。不要用它来新建。入参 boxes:[{date,content,prompt?}]。出参 {results:[...]}。",
+    "批量修改尚未打开的盲盒。content 必填；prompt 可选（不传则保持原 prompt）。不存在或已打开会失败。不要用它新建。出参 {results:[...]}，某条不合格只影响该条。",
     {
       boxes: z.array(z.object({
         date: z.string().describe("已有盒子的日期 YYYY-MM-DD"),
-        content: z.string().describe("新的留言正文，必填"),
-        prompt: z.string().optional().describe("新提示词；不传则保持原值")
+        content: z.string().nullish().describe("新的留言正文，必填；缺了只让该条失败"),
+        prompt: z.string().optional().describe("新的创作方向/备注；不传则保持原值")
       })).min(1).describe("要修改的盒子列表")
     },
     async ({ boxes }) => {
       const results = boxes.map(item => {
         try {
-          const box = updateBoxSafe(item.date, item.content, item.prompt);
+          const box = updateBoxSafe(item.date, item.content ?? "", item.prompt);
           return { date: box.date, ok: true as const, status: box.status };
         } catch (error) {
-          return { date: item.date, ok: false as const, error: errorMessage(error) };
+          return failResult(item.date ?? "", error);
         }
       });
       return textJson({ results });
@@ -220,7 +234,7 @@ ${MCP_INSTRUCTIONS}
             message: "盲盒已删除，该日期现在是空盒。"
           };
         } catch (error) {
-          return { date, ok: false as const, error: errorMessage(error) };
+          return failResult(date, error);
         }
       });
       return textJson({ results });
@@ -229,7 +243,7 @@ ${MCP_INSTRUCTIONS}
 
   server.tool(
     "open_box",
-    "批量打开或查看指定日期。可查已开过的盒子。未到北京时间解锁日则 locked=true 且无 content。入参 dates:[YYYY-MM-DD]。出参 {results:[...]}。",
+    "按日期打开/查看盲盒。未到解锁日：只查看，locked=true，不改状态。已到解锁日且首次打开：返回 content 并标记 opened。已 opened 过：再读，不重复改状态。入参 dates:[YYYY-MM-DD]。出参 {results:[...]}。",
     {
       dates: z.array(z.string()).min(1).describe("要打开/查看的日期列表 YYYY-MM-DD")
     },
@@ -238,7 +252,7 @@ ${MCP_INSTRUCTIONS}
         try {
           return { ok: true as const, ...openBox(date) };
         } catch (error) {
-          return { date, ok: false as const, error: errorMessage(error) };
+          return failResult(date, error);
         }
       });
       return textJson({ results });
@@ -247,7 +261,7 @@ ${MCP_INSTRUCTIONS}
 
   server.tool(
     "today_box",
-    "打开今天的盲盒（北京时间）。无入参。出参与 open_box 单条一致：{ results:[{ ok, ... }] }。",
+    "打开今天的盲盒（北京时间）。规则同 open_box：未到日不改状态；到日首次打开会标 opened。无入参。出参 { results:[{ ok, ... }] }。",
     {},
     async () => {
       try {
@@ -255,11 +269,7 @@ ${MCP_INSTRUCTIONS}
         return textJson({ results: [{ ok: true as const, ...result }] });
       } catch (error) {
         return textJson({
-          results: [{
-            date: nowDateString(),
-            ok: false as const,
-            error: errorMessage(error)
-          }]
+          results: [failResult(nowDateString(), error)]
         });
       }
     }
@@ -267,20 +277,34 @@ ${MCP_INSTRUCTIONS}
 
   server.tool(
     "calendar_status",
-    "查看日期范围内哪些天有盒子、开没开过。不返回留言正文。可选 start_date/end_date，默认今天。stats 对应该查询范围；year_stats 为整年。",
+    `查看日期范围内有盒日期及 locked/opened（无正文）。stats=本次查询范围；year_stats=固定目标年 ${TARGET_YEAR} 整年（与查询范围无关）。start 不能晚于 end，否则报错。`,
     {
       start_date: z.string().optional().describe("开始日期 YYYY-MM-DD，默认今天"),
-      end_date: z.string().optional().describe("结束日期 YYYY-MM-DD，默认等于 start_date")
+      end_date: z.string().optional().describe("结束日期 YYYY-MM-DD，默认等于 start_date；须 ≥ start_date")
     },
     async ({ start_date, end_date }) => {
-      const start = start_date ?? nowDateString();
-      const end = end_date ?? start;
-      const status = calendarStatus(start, end);
-      return textJson({
-        stats: getRangeStats(start, end),
-        year_stats: getStats(),
-        dates: status
-      });
+      try {
+        const start = start_date ?? nowDateString();
+        const end = end_date ?? start;
+        const status = calendarStatus(start, end);
+        return textJson({
+          stats: getRangeStats(start, end),
+          year_stats: getStats(),
+          dates: status
+        });
+      } catch (error) {
+        return {
+          content: [{
+            type: "text" as const,
+            text: JSON.stringify({
+              ok: false,
+              error: errorMessage(error),
+              code: errorCode(error)
+            }, null, 2)
+          }],
+          isError: true as const
+        };
+      }
     }
   );
 
@@ -303,15 +327,47 @@ type SessionEntry = {
   transport: StreamableHTTPServerTransport;
   server: McpServer;
   queue: Promise<void>;
+  /** 在途 POST 数；>0 时推迟因 onclose 触发的删除，避免并行请求踩空 */
+  inflight: number;
+  closing: boolean;
 };
 
 const sessions = new Map<string, SessionEntry>();
+
+function normalizeSessionId(raw: string | string[] | undefined): string | undefined {
+  const value = Array.isArray(raw) ? raw[0] : raw;
+  if (typeof value !== "string") return undefined;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed : undefined;
+}
 
 /** 同一 session 上的并发 POST 串行化，避免 Streamable HTTP 并发串台 */
 function enqueueSession(entry: SessionEntry, task: () => Promise<void>) {
   const run = entry.queue.then(task, task);
   entry.queue = run.then(() => undefined, () => undefined);
   return run;
+}
+
+async function destroySession(sessionId: string, entry: SessionEntry) {
+  if (sessions.get(sessionId) === entry) {
+    sessions.delete(sessionId);
+  }
+  try {
+    await entry.transport.close();
+  } catch {
+    /* already closed */
+  }
+  try {
+    await entry.server.close();
+  } catch {
+    /* already closed */
+  }
+}
+
+function scheduleSessionCleanup(sessionId: string, entry: SessionEntry) {
+  entry.closing = true;
+  if (entry.inflight > 0) return;
+  void destroySession(sessionId, entry);
 }
 
 async function handleStatelessMcp(
@@ -333,56 +389,93 @@ async function handleStatelessMcp(
   await transport.handleRequest(req, res, req.body);
 }
 
+async function createStatefulSession(
+  req: express.Request,
+  res: express.Response
+) {
+  const server = createMcpServer();
+  let entry: SessionEntry | undefined;
+
+  const transport = new StreamableHTTPServerTransport({
+    sessionIdGenerator: () => randomUUID(),
+    enableJsonResponse: true,
+    onsessioninitialized: id => {
+      entry = {
+        transport,
+        server,
+        queue: Promise.resolve(),
+        inflight: 0,
+        closing: false
+      };
+      sessions.set(id, entry);
+    }
+  });
+
+  transport.onclose = () => {
+    const sid = transport.sessionId;
+    if (!sid) return;
+    const current = sessions.get(sid);
+    if (current && current.transport === transport) {
+      scheduleSessionCleanup(sid, current);
+    }
+  };
+
+  await server.connect(transport);
+  await transport.handleRequest(req, res, req.body);
+}
+
 app.post("/mcp", async (req, res) => {
   try {
-    const sessionId = req.headers["mcp-session-id"] as string | undefined;
+    const sessionId = normalizeSessionId(req.headers["mcp-session-id"]);
+
+    // initialize：允许带过期/未知 session id（客户端重连常见），一律建新会话
+    if (isInitializeRequest(req.body)) {
+      if (sessionId && sessions.has(sessionId)) {
+        const old = sessions.get(sessionId)!;
+        await destroySession(sessionId, old);
+      }
+      await createStatefulSession(req, res);
+      return;
+    }
 
     if (sessionId && sessions.has(sessionId)) {
       const entry = sessions.get(sessionId)!;
-      await enqueueSession(entry, async () => {
-        await entry.transport.handleRequest(req, res, req.body);
-      });
-      return;
-    }
+      if (entry.closing) {
+        res.status(400).json({
+          jsonrpc: "2.0",
+          error: {
+            code: -32000,
+            message: "Bad Request: 会话正在关闭，请重新 initialize"
+          },
+          id: null
+        });
+        return;
+      }
 
-    if (!sessionId && isInitializeRequest(req.body)) {
-      const server = createMcpServer();
-      const transport = new StreamableHTTPServerTransport({
-        sessionIdGenerator: () => randomUUID(),
-        enableJsonResponse: true,
-        onsessioninitialized: id => {
-          sessions.set(id, {
-            transport,
-            server,
-            queue: Promise.resolve()
-          });
+      entry.inflight += 1;
+      try {
+        await enqueueSession(entry, async () => {
+          await entry.transport.handleRequest(req, res, req.body);
+        });
+      } finally {
+        entry.inflight -= 1;
+        if (entry.closing && entry.inflight === 0) {
+          void destroySession(sessionId, entry);
         }
-      });
-
-      transport.onclose = () => {
-        const sid = transport.sessionId;
-        if (sid) sessions.delete(sid);
-      };
-
-      await server.connect(transport);
-      await transport.handleRequest(req, res, req.body);
+      }
       return;
     }
 
-    // 无 session 的一次性调用（兼容直接 tools/call）
+    // 无 session：一次性调用（兼容直接 tools/call）
     if (!sessionId) {
       await handleStatelessMcp(req, res);
       return;
     }
 
-    res.status(400).json({
-      jsonrpc: "2.0",
-      error: {
-        code: -32000,
-        message: "Bad Request: 无效的 mcp-session-id，请重新 initialize"
-      },
-      id: null
-    });
+    // 带了已失效的 session id：对工具调用降级为无状态，避免并行竞态下整批失败
+    // （客户端仍应重新 initialize；此降级保证偶发失效时当次请求仍可用）
+    console.warn(`mcp-session-id 已失效，降级无状态处理: ${sessionId}`);
+    await handleStatelessMcp(req, res);
   } catch (error) {
     console.error(error);
     if (!res.headersSent) {
@@ -396,27 +489,24 @@ app.post("/mcp", async (req, res) => {
 });
 
 app.get("/mcp", async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  const sessionId = normalizeSessionId(req.headers["mcp-session-id"]);
   if (!sessionId || !sessions.has(sessionId)) {
     res.status(400).send("Invalid or missing mcp-session-id");
     return;
   }
+  // GET 是长连接 SSE，不能进 POST 串行队列，否则客户端开着 SSE 时 tools/* 会一直等到超时
   const entry = sessions.get(sessionId)!;
-  await enqueueSession(entry, async () => {
-    await entry.transport.handleRequest(req, res);
-  });
+  await entry.transport.handleRequest(req, res);
 });
 
 app.delete("/mcp", async (req, res) => {
-  const sessionId = req.headers["mcp-session-id"] as string | undefined;
+  const sessionId = normalizeSessionId(req.headers["mcp-session-id"]);
   if (!sessionId || !sessions.has(sessionId)) {
     res.status(400).send("Invalid or missing mcp-session-id");
     return;
   }
   const entry = sessions.get(sessionId)!;
-  await entry.transport.close();
-  await entry.server.close();
-  sessions.delete(sessionId);
+  await destroySession(sessionId, entry);
   res.status(204).end();
 });
 

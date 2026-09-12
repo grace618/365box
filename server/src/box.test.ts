@@ -70,6 +70,13 @@ describe("stats and empty dates", () => {
     assert.ok(range.total >= 0);
   });
 
+  it("rejects reverse date range", () => {
+    assert.throws(
+      () => getRangeStats(`${TARGET_YEAR}-12-31`, `${TARGET_YEAR}-01-01`),
+      /DATE_RANGE_INVALID/
+    );
+  });
+
   it("next empty dates are valid target-year days", () => {
     const dates = nextEmptyDates(5);
     assert.equal(dates.length, 5);

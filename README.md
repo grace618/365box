@@ -79,7 +79,7 @@ http://192.168.3.24:3002/mcp
 | 日期 / 时间 | 日期必须是真实日历日 `YYYY-MM-DD`；时间戳北京时间 `...+08:00` |
 | 目标年份 | 只能创建 **2027** 年的盒子 |
 | 增删改查 | `create_box` / `update_box` / `delete_box` / `open_box` 均为**数组**入参 |
-| 统一出参 | `{ "results": [ ... ] }`，逐条 `ok` / `error`，允许部分成功 |
+| 统一出参 | `{ "results": [ ... ] }`，逐条 `ok`；失败带 `error`（中文）+ `code`（如 `INVALID_DATE`），允许部分成功 |
 | 重复日期 | 同一请求里同一天出现多次：第一条成功，后面失败 |
 | create vs update | create 只新建、已有则失败；**不能创建过去/非法日/非 2027**；改内容只能 update |
 | update | 只能改未打开的盒子；`content` 必传 |
@@ -110,7 +110,7 @@ http://192.168.3.24:3002/mcp
 {
   "results": [
     { "date": "2027-01-01", "ok": true, "status": "locked" },
-    { "date": "2027-02-30", "ok": false, "error": "日期格式必须是 YYYY-MM-DD，且必须是真实存在的日历日" }
+    { "date": "2027-02-30", "ok": false, "error": "日期格式必须是 YYYY-MM-DD，且必须是真实存在的日历日", "code": "INVALID_DATE" }
   ]
 }
 ```
@@ -137,7 +137,7 @@ http://192.168.3.24:3002/mcp
 {
   "results": [
     { "date": "2027-01-01", "ok": true, "status": "locked" },
-    { "date": "2027-01-02", "ok": false, "error": "盒子已经打开，不能修改" }
+    { "date": "2027-01-02", "ok": false, "error": "盒子已经打开，不能修改", "code": "BOX_ALREADY_OPENED" }
   ]
 }
 ```
@@ -165,7 +165,7 @@ http://192.168.3.24:3002/mcp
       "deleted": true,
       "message": "盲盒已删除，该日期现在是空盒。"
     },
-    { "date": "2027-01-03", "ok": false, "error": "这个日期没有盒子" }
+    { "date": "2027-01-03", "ok": false, "error": "这个日期没有盒子", "code": "BOX_NOT_FOUND" }
   ]
 }
 ```
@@ -211,7 +211,7 @@ http://192.168.3.24:3002/mcp
 ```
 
 ```json
-{ "date": "坏日期", "ok": false, "error": "日期格式必须是 YYYY-MM-DD" }
+{ "date": "坏日期", "ok": false, "error": "日期格式必须是 YYYY-MM-DD，且必须是真实存在的日历日", "code": "INVALID_DATE" }
 ```
 
 ---
