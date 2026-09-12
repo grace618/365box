@@ -240,6 +240,7 @@ http://192.168.3.24:3002/mcp
 
 ```json
 {
+  "ok": true,
   "stats": {
     "start_date": "2027-01-01",
     "end_date": "2027-12-31",
@@ -252,7 +253,7 @@ http://192.168.3.24:3002/mcp
 }
 ```
 
-`stats` 对应当前查询范围；`year_stats` 是整年。
+`stats` 对应当前查询范围；`year_stats` 是整年。`start > end` 时返回 `{ "ok": false, "error": "...", "code": "DATE_RANGE_INVALID" }`（工具仍成功，看正文，不是 Step error）。
 
 ---
 

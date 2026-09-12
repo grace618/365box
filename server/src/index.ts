@@ -277,7 +277,7 @@ ${MCP_INSTRUCTIONS}
 
   server.tool(
     "calendar_status",
-    `查看日期范围内有盒日期及 locked/opened（无正文）。stats=本次查询范围；year_stats=固定目标年 ${TARGET_YEAR} 整年（与查询范围无关）。start 不能晚于 end，否则报错。`,
+    `查看日期范围内有盒日期及 locked/opened（无正文）。成功 { ok:true, stats, year_stats, dates }；失败（如 start>end）{ ok:false, error, code }，不抛 Step error。stats=本次范围；year_stats=固定 ${TARGET_YEAR} 整年。`,
     {
       start_date: z.string().optional().describe("开始日期 YYYY-MM-DD，默认今天"),
       end_date: z.string().optional().describe("结束日期 YYYY-MM-DD，默认等于 start_date；须 ≥ start_date")
@@ -288,22 +288,17 @@ ${MCP_INSTRUCTIONS}
         const end = end_date ?? start;
         const status = calendarStatus(start, end);
         return textJson({
+          ok: true as const,
           stats: getRangeStats(start, end),
           year_stats: getStats(),
           dates: status
         });
       } catch (error) {
-        return {
-          content: [{
-            type: "text" as const,
-            text: JSON.stringify({
-              ok: false,
-              error: errorMessage(error),
-              code: errorCode(error)
-            }, null, 2)
-          }],
-          isError: true as const
-        };
+        return textJson({
+          ok: false as const,
+          error: errorMessage(error),
+          code: errorCode(error)
+        });
       }
     }
   );

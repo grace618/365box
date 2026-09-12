@@ -19,8 +19,9 @@ export const MCP_INSTRUCTIONS = `你正在使用「365 Day Box」：按日期存
 10. 批量接口看 results 里每一条的 ok；部分失败时成功的条目仍然有效。失败条同时有 error（中文说明）和 code（稳定错误码，如 INVALID_DATE）。缺字段也只会让该条失败。
 11. 同一请求里不要对同一日期重复提交；若重复，只有第一条会成功。
 12. 写多天：先 next_empty_dates(count=N)，再一次 create_box 传入 N 个不同日期。
-13. calendar_status：start_date 不能晚于 end_date，否则明确报错（不会静默空结果）；整工具失败时也是 { ok:false, error, code }。
+13. calendar_status：start_date 不能晚于 end_date；失败时仍是工具成功返回，正文 { ok:false, error, code }（与批量工具一样看正文，不是 Step error）。
 14. year_stats 永远是目标年 2027 整年，与 start_date/end_date 无关；stats 才对应当前查询范围。
+15. 约定：业务失败都看正文里的 ok/code（批量看 results[]；单次工具看顶层 ok）。传输/协议级故障才是 Step error。
 
 ## open_box / today_box 会不会改状态
 | 情况 | 是否返回 content | 是否把盒子标成 opened |
@@ -148,8 +149,9 @@ today_box = open_box(今天)，规则相同。
 入参示例：
 { "start_date": "2027-01-01", "end_date": "2027-01-31" }
 
-出参示例：
+出参示例（成功）：
 {
+  "ok": true,
   "stats": {
     "start_date": "2027-01-01",
     "end_date": "2027-01-31",
@@ -169,10 +171,17 @@ today_box = open_box(今天)，规则相同。
   ]
 }
 
+出参示例（start > end，仍是工具成功，看正文 ok）：
+{
+  "ok": false,
+  "error": "开始日期不能晚于结束日期，请交换 start_date / end_date",
+  "code": "DATE_RANGE_INVALID"
+}
+
 说明：
 - stats = 本次 start～end 查询范围
 - year_stats = 固定目标年 2027 整年（即使你查的是 2026 某天，year_stats.year 仍是 2027）
-- start > end → 报错：「开始日期不能晚于结束日期，请交换 start_date / end_date」
+- 业务失败统一看正文 ok/code，不要当 Step error
 
 ## 出错时怎么处理（看 code，文案可能微调）
 - INVALID_DATE → 换真实日历日 YYYY-MM-DD
