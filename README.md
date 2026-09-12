@@ -28,6 +28,28 @@ http://192.168.3.101:3002/mcp
 
 首次启动会自动创建 SQLite（`server/data/`，已被 gitignore）。
 
+## 鉴权（推荐开启）
+
+设置环境变量 `AUTH_TOKEN` 后，MCP 与除 `/api/health` 外的 API 都需要令牌：
+
+```bash
+export AUTH_TOKEN='你的长随机串'
+npm run server
+```
+
+请求头任选其一：
+- `Authorization: Bearer 你的长随机串`
+- `X-Box-Token: 你的长随机串`
+
+Docker：在项目目录建 `.env`（可参考 `.env.example`），写入 `AUTH_TOKEN=...`，再 `docker compose up -d --build`。
+
+网页若检测到已开启鉴权，会提示填写 token（保存在浏览器 localStorage）。MCP 客户端在配置里加 `headers.Authorization`（见 `mcp-config.example.json`）。
+
+## 导出 JSON
+
+- MCP 工具：`export_boxes`（无入参，返回全部盒子含正文）
+- HTTP：`GET /api/export`（需鉴权）
+
 ## Docker 部署
 
 机器上已装 Docker 时：

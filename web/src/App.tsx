@@ -27,7 +27,18 @@ type Stats = {
   empty: number;
 };
 
+type Health = {
+  ok: boolean;
+  today: string;
+  now?: string;
+  timezone?: string;
+  utc_offset?: string;
+  year?: number;
+  auth_required?: boolean;
+};
+
 const WEEKDAYS = ["一", "二", "三", "四", "五", "六", "日"];
+const TOKEN_KEY = "365box_token";
 
 function pad2(n: number) {
   return String(n).padStart(2, "0");
@@ -49,6 +60,11 @@ function mondayBasedWeekday(date: string) {
   return (new Date(Date.UTC(year, month - 1, day)).getUTCDay() + 6) % 7;
 }
 
+function authHeaders(token: string): HeadersInit {
+  if (!token.trim()) return {};
+  return { Authorization: `Bearer ${token.trim()}` };
+}
+
 export default function App() {
   const [year, setYear] = useState(2027);
   const days = useMemo(() => buildYearDays(year), [year]);
@@ -57,30 +73,52 @@ export default function App() {
   const [statuses, setStatuses] = useState<Record<string, Status>>({});
   const [stats, setStats] = useState<Stats>({ total: 0, locked: 0, opened: 0, empty: 365 });
   const [selected, setSelected] = useState<BoxResult | null>(null);
+  const [confirmDate, setConfirmDate] = useState<string | null>(null);
+  const [opening, setOpening] = useState(false);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [today, setToday] = useState("");
+  const [now, setNow] = useState("");
+  const [authRequired, setAuthRequired] = useState(false);
+  const [token, setToken] = useState(() => localStorage.getItem(TOKEN_KEY) ?? "");
+  const [tokenDraft, setTokenDraft] = useState(() => localStorage.getItem(TOKEN_KEY) ?? "");
 
   const months = useMemo(() => Array.from({ length: 12 }, (_, index) => ({
     number: index + 1,
     days: days.filter(date => Number(date.slice(5, 7)) === index + 1)
   })), [days]);
 
-  async function load() {
+  async function load(nextToken = token) {
     setLoading(true);
     setError(null);
     try {
       const healthRes = await fetch("/api/health");
       if (!healthRes.ok) throw new Error("health failed");
-      const health = await healthRes.json() as { year?: number };
+      const health = await healthRes.json() as Health;
       const nextYear = health.year ?? 2027;
       setYear(nextYear);
+      setToday(health.today ?? "");
+      setNow(health.now ?? "");
+      setAuthRequired(Boolean(health.auth_required));
+
+      if (health.auth_required && !nextToken.trim()) {
+        setStatuses({});
+        setStats({ total: 0, locked: 0, opened: 0, empty: 365 });
+        setError("服务已开启鉴权，请先填写访问 token。");
+        return;
+      }
+
       const start = `${nextYear}-01-01`;
       const end = `${nextYear}-12-31`;
+      const headers = authHeaders(nextToken);
 
       const [calendarRes, statsRes] = await Promise.all([
-        fetch(`/api/calendar?start=${start}&end=${end}`),
-        fetch("/api/stats")
+        fetch(`/api/calendar?start=${start}&end=${end}`, { headers }),
+        fetch("/api/stats", { headers })
       ]);
+      if (calendarRes.status === 401 || statsRes.status === 401) {
+        throw new Error("token 无效或未提供");
+      }
       if (!calendarRes.ok || !statsRes.ok) {
         throw new Error("后端返回异常，请确认服务已启动");
       }
@@ -89,8 +127,8 @@ export default function App() {
       calendar.forEach(item => { next[item.date] = item; });
       setStatuses(next);
       setStats(await statsRes.json());
-    } catch {
-      setError("连不上后端。请先在项目根目录运行 npm run dev。");
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "连不上后端。请先在项目根目录运行 npm run dev。");
       setStatuses({});
     } finally {
       setLoading(false);
@@ -101,16 +139,21 @@ export default function App() {
     void load();
   }, []);
 
-  async function open(date: string) {
-    const status = statuses[date];
-    if (status?.status !== "opened") {
-      const ok = window.confirm(`确定打开 ${date} 的盒子吗？打开后会标记为已开启。`);
-      if (!ok) return;
-    }
+  function saveToken() {
+    const value = tokenDraft.trim();
+    localStorage.setItem(TOKEN_KEY, value);
+    setToken(value);
+    void load(value);
+  }
 
+  async function openBoxRequest(date: string) {
     try {
+      setOpening(true);
       setError(null);
-      const res = await fetch(`/api/box/${date}/open`, { method: "POST" });
+      const res = await fetch(`/api/box/${date}/open`, {
+        method: "POST",
+        headers: authHeaders(token)
+      });
       const result = await res.json();
       if (!res.ok) {
         setSelected({
@@ -124,16 +167,37 @@ export default function App() {
       await load();
     } catch {
       setError("打开盒子失败，请检查后端是否在运行。");
+    } finally {
+      setOpening(false);
+      setConfirmDate(null);
     }
   }
+
+  function open(date: string) {
+    const status = statuses[date];
+    if (status?.status !== "opened") {
+      setConfirmDate(date);
+      return;
+    }
+    void openBoxRequest(date);
+  }
+
+  const clockText = useMemo(() => {
+    if (!now) return today ? `北京时间 ${today}` : "";
+    // now: 2026-09-12T12:29:51+08:00 → 2026-09-12 12:29:51
+    const m = now.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/);
+    if (!m) return `北京时间 ${now}`;
+    return `北京时间 ${m[1]} ${m[2]}`;
+  }, [now, today]);
 
   return (
     <main className="page">
       <header>
         <div>
           <div className="eyebrow">365 DAY BOX</div>
-          <h1>哥哥写给未来的盲盒</h1>
+          <h1>写给未来的盲盒</h1>
           <p className="sub">每一天一个盒子。未来的留言，等日期自己把锁打开。</p>
+          {clockText && <p className="timeMeta">{clockText}</p>}
         </div>
         <div className="stats">
           <span>已准备 <b>{stats.total}</b></span>
@@ -141,6 +205,22 @@ export default function App() {
           <span>空盒 <b>{stats.empty}</b></span>
         </div>
       </header>
+
+      {authRequired && (
+        <section className="authBar">
+          <label>
+            访问 Token
+            <input
+              type="password"
+              value={tokenDraft}
+              onChange={e => setTokenDraft(e.target.value)}
+              placeholder="Authorization Bearer token"
+              autoComplete="off"
+            />
+          </label>
+          <button type="button" onClick={saveToken}>保存并刷新</button>
+        </section>
+      )}
 
       {error && (
         <section className="bannerError" role="alert">
@@ -192,7 +272,27 @@ export default function App() {
         })}
       </section>
 
-      {selected && (
+      {confirmDate && (
+        <div className="overlay" onClick={() => !opening && setConfirmDate(null)}>
+          <div className="modal" onClick={e => e.stopPropagation()}>
+            <button className="close" type="button" disabled={opening} onClick={() => setConfirmDate(null)}>×</button>
+            <div className="bigIcon">🔒</div>
+            <h2>打开这个盒子？</h2>
+            <p>{confirmDate}</p>
+            <div className="notice">打开后会标记为已开启，这个操作不能撤销。</div>
+            <div className="modalActions">
+              <button type="button" className="btnGhost" disabled={opening} onClick={() => setConfirmDate(null)}>
+                取消
+              </button>
+              <button type="button" className="btnPrimary" disabled={opening} onClick={() => void openBoxRequest(confirmDate)}>
+                {opening ? "打开中…" : "确认打开"}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selected && !confirmDate && (
         <div className="overlay" onClick={() => setSelected(null)}>
           <div className="modal" onClick={e => e.stopPropagation()}>
             <button className="close" onClick={() => setSelected(null)}>×</button>
@@ -214,7 +314,7 @@ export default function App() {
                 <div className="bigIcon">🔒</div>
                 <h2>还不能打开</h2>
                 <p>{selected.date}</p>
-                <div className="notice">等到这一天，盒子才会打开。</div>
+                <div className="notice">等到这一天（北京时间），盒子才会打开。</div>
               </>
             ) : (
               <>

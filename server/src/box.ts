@@ -1,5 +1,5 @@
 import { createBox, deleteBox, getBox, listBoxes, markOpened, updateBox, db } from "./database.js";
-import { beijingDayStartISO, todayBeijingDate } from "./time.js";
+import { beijingDayStartISO, todayBeijingDate, nowBeijingISO } from "./time.js";
 import { TARGET_YEAR } from "./config.js";
 
 export { TARGET_YEAR };
@@ -200,4 +200,28 @@ export function nextEmptyDates(count?: number) {
 
   if (count === undefined) return result;
   return result.slice(0, count);
+}
+
+/** 导出全部盒子为 JSON（含正文，供备份 / MCP） */
+export function exportBoxesJson() {
+  const boxes = listBoxes().map(b => ({
+    date: b.date,
+    content: b.content,
+    prompt: b.prompt,
+    status: b.status,
+    created_at: b.created_at,
+    updated_at: b.updated_at,
+    opened_at: b.opened_at
+  }));
+
+  return {
+    ok: true as const,
+    format: "365box-export-v1" as const,
+    exported_at: nowBeijingISO(),
+    timezone: "Asia/Shanghai",
+    utc_offset: "+08:00",
+    year: TARGET_YEAR,
+    count: boxes.length,
+    boxes
+  };
 }

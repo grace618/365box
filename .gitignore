@@ -8,6 +8,7 @@ dist/
 web/dist/
 .env
 .env.*
+!.env.example
 *.log
 .vite/
 *.tsbuildinfo

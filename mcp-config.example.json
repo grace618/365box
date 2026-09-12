@@ -1,7 +1,10 @@
 {
   "mcpServers": {
     "365-day-box": {
-      "url": "http://192.168.3.24:3002/mcp"
+      "url": "http://192.168.3.24:3002/mcp",
+      "headers": {
+        "Authorization": "Bearer 换成你的AUTH_TOKEN"
+      }
     }
   }
 }

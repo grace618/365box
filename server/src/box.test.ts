@@ -9,6 +9,7 @@ import {
   getStats,
   getRangeStats,
   nextEmptyDates,
+  exportBoxesJson,
   TARGET_YEAR
 } from "./box.js";
 
@@ -84,5 +85,14 @@ describe("stats and empty dates", () => {
       assert.ok(d.startsWith(`${TARGET_YEAR}-`));
       assert.equal(isValidDate(d), true);
     }
+  });
+
+  it("export includes format and boxes array", () => {
+    const payload = exportBoxesJson();
+    assert.equal(payload.ok, true);
+    assert.equal(payload.format, "365box-export-v1");
+    assert.equal(payload.timezone, "Asia/Shanghai");
+    assert.ok(Array.isArray(payload.boxes));
+    assert.equal(payload.count, payload.boxes.length);
   });
 });

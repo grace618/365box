@@ -22,6 +22,7 @@ export const MCP_INSTRUCTIONS = `你正在使用「365 Day Box」：按日期存
 13. calendar_status：start_date 不能晚于 end_date；失败时仍是工具成功返回，正文 { ok:false, error, code }（与批量工具一样看正文，不是 Step error）。
 14. year_stats 永远是目标年 2027 整年，与 start_date/end_date 无关；stats 才对应当前查询范围。
 15. 约定：业务失败都看正文里的 ok/code（批量看 results[]；单次工具看顶层 ok）。传输/协议级故障才是 Step error。
+16. 备份用 export_boxes：导出全部盒子 JSON（含正文）。服务若开启 AUTH_TOKEN，客户端必须带 Authorization: Bearer <token>。
 
 ## open_box / today_box 会不会改状态
 | 情况 | 是否返回 content | 是否把盒子标成 opened |
@@ -43,6 +44,7 @@ today_box = open_box(今天)，规则相同。
 | 打开/查看某些日期（到日首次打开会改状态） | open_box |
 | 只看今天 | today_box |
 | 看某段日期有没有盒、开没开（不要正文） | calendar_status |
+| 导出全部盒子 JSON（备份，含正文） | export_boxes |
 
 ## 常见操作顺序
 写一批新盒子：
@@ -183,6 +185,31 @@ today_box = open_box(今天)，规则相同。
 - year_stats = 固定目标年 2027 整年（即使你查的是 2026 某天，year_stats.year 仍是 2027）
 - 业务失败统一看正文 ok/code，不要当 Step error
 
+### export_boxes
+入参：无（传 {}）
+
+出参示例：
+{
+  "ok": true,
+  "format": "365box-export-v1",
+  "exported_at": "2026-09-12T12:00:00+08:00",
+  "timezone": "Asia/Shanghai",
+  "utc_offset": "+08:00",
+  "year": 2027,
+  "count": 1,
+  "boxes": [
+    {
+      "date": "2027-01-01",
+      "content": "给未来的你：新年快乐。",
+      "prompt": "元旦",
+      "status": "locked",
+      "created_at": "2026-09-11T20:00:00+08:00",
+      "updated_at": "2026-09-11T20:00:00+08:00",
+      "opened_at": null
+    }
+  ]
+}
+
 ## 出错时怎么处理（看 code，文案可能微调）
 - INVALID_DATE → 换真实日历日 YYYY-MM-DD
 - DATE_YEAR_INVALID → 只能写 2027
@@ -192,4 +219,5 @@ today_box = open_box(今天)，规则相同。
 - BOX_ALREADY_OPENED → 不能再改，只能读
 - CONTENT_REQUIRED → content 必须有实质文字
 - DATE_RANGE_INVALID → 交换 start_date / end_date
+- UNAUTHORIZED → 检查 AUTH_TOKEN / Authorization 头
 `;

@@ -19,14 +19,18 @@ import {
   getStats,
   getRangeStats,
   nextEmptyDates,
+  exportBoxesJson,
   nowDateString,
   TARGET_YEAR
 } from "./box.js";
 import { MCP_INSTRUCTIONS } from "./mcp-docs.js";
+import { nowBeijingISO } from "./time.js";
 
 /** 默认 0.0.0.0，方便 MCP 客户端用局域网 IP 连接；只要本机可用 HOST=127.0.0.1 */
 const HOST = process.env.HOST ?? "0.0.0.0";
 const PORT = Number(process.env.PORT ?? 3002);
+/** 设置后启用鉴权：Authorization: Bearer <token> 或 X-Box-Token / ?token= */
+const AUTH_TOKEN = (process.env.AUTH_TOKEN ?? "").trim();
 
 function lanIPv4Addresses() {
   const result: string[] = [];
@@ -73,7 +77,8 @@ function errorMessage(error: unknown) {
     BOX_ALREADY_EXISTS: "这个日期已经有盒子了",
     BOX_NOT_FOUND: "这个日期没有盒子",
     BOX_ALREADY_OPENED: "盒子已经打开，不能修改",
-    DATE_RANGE_INVALID: "开始日期不能晚于结束日期，请交换 start_date / end_date"
+    DATE_RANGE_INVALID: "开始日期不能晚于结束日期，请交换 start_date / end_date",
+    UNAUTHORIZED: "未授权，请提供正确的 token（Authorization: Bearer … 或 X-Box-Token）"
   };
   return messages[code] ?? code;
 }
@@ -105,15 +110,53 @@ function sendApiError(res: express.Response, error: unknown, status = 400) {
   });
 }
 
+function extractAuthToken(req: express.Request): string | undefined {
+  const auth = req.headers.authorization;
+  if (typeof auth === "string" && auth.toLowerCase().startsWith("bearer ")) {
+    const value = auth.slice(7).trim();
+    if (value) return value;
+  }
+  const header = req.headers["x-box-token"];
+  const fromHeader = Array.isArray(header) ? header[0] : header;
+  if (typeof fromHeader === "string" && fromHeader.trim()) return fromHeader.trim();
+  const q = req.query.token;
+  if (typeof q === "string" && q.trim()) return q.trim();
+  return undefined;
+}
+
+function requireAuth(
+  req: express.Request,
+  res: express.Response,
+  next: express.NextFunction
+) {
+  if (!AUTH_TOKEN) {
+    next();
+    return;
+  }
+  if (extractAuthToken(req) === AUTH_TOKEN) {
+    next();
+    return;
+  }
+  sendApiError(res, new Error("UNAUTHORIZED"), 401);
+}
+
 app.get("/api/health", (_req, res) => {
-  res.json({ ok: true, today: nowDateString(), year: TARGET_YEAR });
+  res.json({
+    ok: true,
+    today: nowDateString(),
+    now: nowBeijingISO(),
+    timezone: "Asia/Shanghai",
+    utc_offset: "+08:00",
+    year: TARGET_YEAR,
+    auth_required: Boolean(AUTH_TOKEN)
+  });
 });
 
-app.get("/api/stats", (_req, res) => {
+app.get("/api/stats", requireAuth, (_req, res) => {
   res.json(getStats());
 });
 
-app.get("/api/calendar", (req, res) => {
+app.get("/api/calendar", requireAuth, (req, res) => {
   try {
     const start = String(req.query.start ?? "0000-01-01");
     const end = String(req.query.end ?? "9999-12-31");
@@ -123,8 +166,18 @@ app.get("/api/calendar", (req, res) => {
   }
 });
 
+/** 导出全部盒子 JSON（含正文） */
+app.get("/api/export", requireAuth, (_req, res) => {
+  const payload = exportBoxesJson();
+  res.setHeader(
+    "Content-Disposition",
+    `attachment; filename="365box-export-${payload.exported_at.slice(0, 10)}.json"`
+  );
+  res.json(payload);
+});
+
 /** 只读查看，不会标记已打开 */
-app.get("/api/box/:date", (req, res) => {
+app.get("/api/box/:date", requireAuth, (req, res) => {
   try {
     res.json(inspectBox(req.params.date));
   } catch (error) {
@@ -133,7 +186,7 @@ app.get("/api/box/:date", (req, res) => {
 });
 
 /** 真正打开：到日会标记 opened */
-app.post("/api/box/:date/open", (req, res) => {
+app.post("/api/box/:date/open", requireAuth, (req, res) => {
   try {
     res.json(openBox(req.params.date));
   } catch (error) {
@@ -315,6 +368,13 @@ ${MCP_INSTRUCTIONS}
     }
   );
 
+  server.tool(
+    "export_boxes",
+    "导出全部盲盒为 JSON（含 content/prompt/状态与时间戳），用于备份。无入参。出参 format=365box-export-v1。",
+    {},
+    async () => textJson(exportBoxesJson())
+  );
+
   return server;
 }
 
@@ -419,7 +479,7 @@ async function createStatefulSession(
   await transport.handleRequest(req, res, req.body);
 }
 
-app.post("/mcp", async (req, res) => {
+app.post("/mcp", requireAuth, async (req, res) => {
   try {
     const sessionId = normalizeSessionId(req.headers["mcp-session-id"]);
 
@@ -483,7 +543,7 @@ app.post("/mcp", async (req, res) => {
   }
 });
 
-app.get("/mcp", async (req, res) => {
+app.get("/mcp", requireAuth, async (req, res) => {
   const sessionId = normalizeSessionId(req.headers["mcp-session-id"]);
   if (!sessionId || !sessions.has(sessionId)) {
     res.status(400).send("Invalid or missing mcp-session-id");
@@ -494,7 +554,7 @@ app.get("/mcp", async (req, res) => {
   await entry.transport.handleRequest(req, res);
 });
 
-app.delete("/mcp", async (req, res) => {
+app.delete("/mcp", requireAuth, async (req, res) => {
   const sessionId = normalizeSessionId(req.headers["mcp-session-id"]);
   if (!sessionId || !sessions.has(sessionId)) {
     res.status(400).send("Invalid or missing mcp-session-id");
@@ -524,6 +584,11 @@ app.listen(PORT, HOST, () => {
   }
   if (lans[0]) {
     console.log(`（多数 MCP 客户端请填上面的局域网地址）`);
+  }
+  if (AUTH_TOKEN) {
+    console.log(`鉴权已开启：请求需带 Authorization: Bearer <AUTH_TOKEN> 或 X-Box-Token`);
+  } else {
+    console.log(`鉴权未开启：设置环境变量 AUTH_TOKEN 后启用`);
   }
 }).on("error", (error: NodeJS.ErrnoException) => {
   if (error.code === "EADDRINUSE") {

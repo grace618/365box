@@ -9,6 +9,7 @@ services:
       HOST: "0.0.0.0"
       PORT: "3002"
       WEB_DIST: "/app/web/dist"
+      AUTH_TOKEN: ${AUTH_TOKEN:-}
     volumes:
       - box-data:/app/server/data
 
