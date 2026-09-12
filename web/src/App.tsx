@@ -152,7 +152,7 @@ export default function App() {
       setMinYear(nextMin);
       setMaxYear(nextMax);
 
-      const defaultYear = health.year ?? Number(todayStr.slice(0, 4)) || nextMin;
+      const defaultYear = health.year ?? (Number(todayStr.slice(0, 4)) || nextMin);
       const viewYear = options?.keepYear && year != null
         ? Math.min(nextMax, Math.max(nextMin, year))
         : Math.min(nextMax, Math.max(nextMin, defaultYear));
