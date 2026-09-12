@@ -88,8 +88,9 @@ export default function App() {
     days: days.filter(date => Number(date.slice(5, 7)) === index + 1)
   })), [days]);
 
-  async function load(nextToken = token) {
-    setLoading(true);
+  async function load(nextToken = token, options?: { silent?: boolean }) {
+    const silent = Boolean(options?.silent);
+    if (!silent) setLoading(true);
     setError(null);
     try {
       const healthRes = await fetch("/api/health");
@@ -129,9 +130,9 @@ export default function App() {
       setStats(await statsRes.json());
     } catch (e) {
       setError(e instanceof Error ? e.message : "连不上后端。请先在项目根目录运行 npm run dev。");
-      setStatuses({});
+      if (!silent) setStatuses({});
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
   }
 
@@ -154,8 +155,9 @@ export default function App() {
         method: "POST",
         headers: authHeaders(token)
       });
-      const result = await res.json();
+      const result = await res.json() as BoxResult & { error?: string };
       if (!res.ok) {
+        setConfirmDate(null);
         setSelected({
           exists: false,
           date,
@@ -163,13 +165,20 @@ export default function App() {
         });
         return;
       }
+      setConfirmDate(null);
       setSelected(result);
-      await load();
+      if (result.exists && !result.locked) {
+        setStatuses(prev => ({
+          ...prev,
+          [date]: { date, status: "opened", has_box: true }
+        }));
+      }
+      await load(token, { silent: true });
     } catch {
       setError("打开盒子失败，请检查后端是否在运行。");
+      setConfirmDate(null);
     } finally {
       setOpening(false);
-      setConfirmDate(null);
     }
   }
 
@@ -279,7 +288,6 @@ export default function App() {
             <div className="bigIcon">🔒</div>
             <h2>打开这个盒子？</h2>
             <p>{confirmDate}</p>
-            <div className="notice">打开后会标记为已开启，这个操作不能撤销。</div>
             <div className="modalActions">
               <button type="button" className="btnGhost" disabled={opening} onClick={() => setConfirmDate(null)}>
                 取消
@@ -313,8 +321,8 @@ export default function App() {
               <>
                 <div className="bigIcon">🔒</div>
                 <h2>还不能打开</h2>
-                <p>{selected.date}</p>
-                <div className="notice">等到这一天（北京时间），盒子才会打开。</div>
+                <p>{selected.date}（北京时间）</p>
+                <div className="notice">等到这一天，盒子才会打开。</div>
               </>
             ) : (
               <>
