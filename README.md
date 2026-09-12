@@ -90,7 +90,7 @@ http://192.168.3.24:3002/mcp
 - Resource `box://docs`：与 instructions 同源
 - 各 tool 的 description：一句话说明适用场景
 
-改对接说明只改：`server/src/mcp-docs.ts`。换目标年份只改：`server/src/config.ts`。下面「接口说明」给人对照字段用。
+改对接说明只改：`server/src/mcp-docs.ts`。换开放起点只改：`server/src/config.ts` 的 `START_DATE`。下面「接口说明」给人对照字段用。
 
 ## 接口说明
 
@@ -99,13 +99,14 @@ http://192.168.3.24:3002/mcp
 | 约定 | 说明 |
 |------|------|
 | 日期 / 时间 | 日期必须是真实日历日 `YYYY-MM-DD`；时间戳北京时间 `...+08:00` |
-| 目标年份 | 只能创建 **2027** 年的盒子 |
+| 开放起点 | 从 **2026-09-15** 起可写，无结束日，可跨年；仍须 ≥ 今天 |
 | 增删改查 | `create_box` / `update_box` / `delete_box` / `open_box` 均为**数组**入参 |
 | 统一出参 | `{ "results": [ ... ] }`，逐条 `ok`；失败带 `error`（中文）+ `code`（如 `INVALID_DATE`），允许部分成功 |
 | 重复日期 | 同一请求里同一天出现多次：第一条成功，后面失败 |
-| create vs update | create 只新建、已有则失败；**不能创建过去/非法日/非 2027**；改内容只能 update |
+| create vs update | create 只新建、已有则失败；**不能创建过去/非法日/早于起点**；改内容只能 update |
 | update | 只能改未打开的盒子；`content` 必传 |
 | 解锁 / 日历 | 没打开过的一直是 `locked`；只有真正打开过才是 `opened` |
+| 网页 | 按年切换（最早 2026，最晚当年+3）；近 7 天才能打开/查看 |
 | HTTP | `GET /api/box/:date` 只读不拆盒；`POST /api/box/:date/open` 才打开 |
 
 推荐流程：`next_empty_dates` → `create_box` → `calendar_status` → 到日再 `today_box` / `open_box`
@@ -114,14 +115,14 @@ http://192.168.3.24:3002/mcp
 
 ### create_box（增）
 
-批量新建。某日已有盒子 → 该条失败，不覆盖。**只能写 2027；早于今天不能创建；非法日历日（如 02-30）不能创建。**
+批量新建。某日已有盒子 → 该条失败，不覆盖。**须 ≥ 2026-09-15 且 ≥ 今天；非法日历日（如 02-30）不能创建。**
 
 **入参**
 
 ```json
 {
   "boxes": [
-    { "date": "2027-01-01", "content": "留言（必填）", "prompt": "可选提示词" }
+    { "date": "2026-09-15", "content": "留言（必填）", "prompt": "可选提示词" }
   ]
 }
 ```
@@ -131,8 +132,8 @@ http://192.168.3.24:3002/mcp
 ```json
 {
   "results": [
-    { "date": "2027-01-01", "ok": true, "status": "locked" },
-    { "date": "2027-02-30", "ok": false, "error": "日期格式必须是 YYYY-MM-DD，且必须是真实存在的日历日", "code": "INVALID_DATE" }
+    { "date": "2026-09-15", "ok": true, "status": "locked" },
+    { "date": "2026-09-31", "ok": false, "error": "日期格式必须是 YYYY-MM-DD，且必须是真实存在的日历日", "code": "INVALID_DATE" }
   ]
 }
 ```
@@ -255,7 +256,7 @@ http://192.168.3.24:3002/mcp
 **入参**（均可选；默认 `start_date=今天`，`end_date=start_date`）
 
 ```json
-{ "start_date": "2027-01-01", "end_date": "2027-12-31" }
+{ "start_date": "2026-09-01", "end_date": "2026-09-30" }
 ```
 
 **出参**
@@ -264,24 +265,24 @@ http://192.168.3.24:3002/mcp
 {
   "ok": true,
   "stats": {
-    "start_date": "2027-01-01",
-    "end_date": "2027-12-31",
+    "start_date": "2026-09-01",
+    "end_date": "2026-09-30",
     "total": 1,
     "locked": 1,
     "opened": 0
   },
-  "year_stats": { "year": 2027, "total": 1, "locked": 1, "opened": 0, "empty": 364 },
-  "dates": [{ "date": "2027-01-01", "status": "locked", "has_box": true }]
+  "year_stats": { "year": 2026, "total": 1, "locked": 1, "opened": 0, "empty": 107 },
+  "dates": [{ "date": "2026-09-15", "status": "locked", "has_box": true }]
 }
 ```
 
-`stats` 对应当前查询范围；`year_stats` 是整年。`start > end` 时返回 `{ "ok": false, "error": "...", "code": "DATE_RANGE_INVALID" }`（工具仍成功，看正文，不是 Step error）。
+`stats` 对应当前查询范围；`year_stats` 是 `start_date` 所在年（2026 从 9/15 起算）。`start > end` 时返回 `{ "ok": false, "error": "...", "code": "DATE_RANGE_INVALID" }`（工具仍成功，看正文，不是 Step error）。
 
 ---
 
 ### next_empty_dates
 
-返回 **2027 年**还能写入的空日期（自动排除过去的日期和已有盒子）。
+从 `max(今天, 2026-09-15)` 起往后找还能写入的空日期。
 
 **入参**
 
@@ -289,13 +290,13 @@ http://192.168.3.24:3002/mcp
 { "count": 10 }
 ```
 
-- 不传 `count` → 全部可写空位  
-- 传了 → 前 N 个，范围 **1–365**
+- 不传 `count` → 默认 **90** 个  
+- 传了 → 前 N 个，范围 **1–366**
 
 **出参**
 
 ```json
-{ "dates": ["2027-01-01", "2027-01-02"] }
+{ "dates": ["2026-09-15", "2026-09-16"] }
 ```
 
 ---
@@ -305,7 +306,7 @@ http://192.168.3.24:3002/mcp
 | 文案 |
 |------|
 | 日期格式必须是 YYYY-MM-DD，且必须是真实存在的日历日 |
-| 只能创建 2027 年的盒子 |
+| 不能早于开放起点 2026-09-15 |
 | 不能创建过去的日期 |
 | 盒子内容不能为空 |
 | 这个日期已经有盒子了 |

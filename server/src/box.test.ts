@@ -10,13 +10,15 @@ import {
   getRangeStats,
   nextEmptyDates,
   exportBoxesJson,
-  TARGET_YEAR
+  daysInclusive,
+  START_DATE,
+  NEXT_EMPTY_DEFAULT
 } from "./box.js";
 
 describe("date validation", () => {
   it("accepts real calendar days", () => {
+    assert.equal(isValidDate("2026-09-15"), true);
     assert.equal(isValidDate("2027-02-28"), true);
-    assert.equal(isValidDate(`${TARGET_YEAR}-01-01`), true);
   });
 
   it("rejects impossible days", () => {
@@ -27,10 +29,10 @@ describe("date validation", () => {
 });
 
 describe("create rules", () => {
-  const date = `${TARGET_YEAR}-05-20`;
+  const date = "2027-05-20";
 
-  it("rejects wrong year and invalid day", () => {
-    assert.throws(() => createBoxSafe("2028-01-01", "x"), /DATE_YEAR_INVALID/);
+  it("rejects before start and invalid day", () => {
+    assert.throws(() => createBoxSafe("2026-09-14", "x"), /DATE_BEFORE_START/);
     assert.throws(() => createBoxSafe("2027-02-30", "x"), /INVALID_DATE/);
   });
 
@@ -47,7 +49,7 @@ describe("create rules", () => {
 
 describe("open vs inspect", () => {
   it("inspect does not mark opened for future locked boxes", () => {
-    const date = `${TARGET_YEAR}-11-11`;
+    const date = "2027-11-11";
     try { deleteBoxSafe(date); } catch { /* */ }
     createBoxSafe(date, "secret");
     const a = inspectBox(date);
@@ -62,35 +64,42 @@ describe("open vs inspect", () => {
 });
 
 describe("stats and empty dates", () => {
-  it("year stats and range stats are scoped", () => {
-    const stats = getStats();
-    assert.equal(stats.year, TARGET_YEAR);
-    assert.ok(stats.empty >= 0);
-    const range = getRangeStats(`${TARGET_YEAR}-01-01`, `${TARGET_YEAR}-01-31`);
-    assert.equal(range.start_date, `${TARGET_YEAR}-01-01`);
+  it("year stats for 2026 use start_date denominator", () => {
+    const stats = getStats(2026);
+    assert.equal(stats.year, 2026);
+    const denom = daysInclusive(START_DATE, "2026-12-31");
+    assert.equal(stats.empty, denom - stats.total);
+  });
+
+  it("range stats are scoped", () => {
+    const range = getRangeStats("2026-09-01", "2026-09-30");
+    assert.equal(range.start_date, "2026-09-01");
     assert.ok(range.total >= 0);
   });
 
   it("rejects reverse date range", () => {
     assert.throws(
-      () => getRangeStats(`${TARGET_YEAR}-12-31`, `${TARGET_YEAR}-01-01`),
+      () => getRangeStats("2026-12-31", "2026-01-01"),
       /DATE_RANGE_INVALID/
     );
   });
 
-  it("next empty dates are valid target-year days", () => {
-    const dates = nextEmptyDates(5);
-    assert.equal(dates.length, 5);
+  it("next empty dates default to 90 from start window", () => {
+    const dates = nextEmptyDates();
+    assert.equal(dates.length, NEXT_EMPTY_DEFAULT);
+    assert.ok(dates[0]! >= START_DATE);
     for (const d of dates) {
-      assert.ok(d.startsWith(`${TARGET_YEAR}-`));
       assert.equal(isValidDate(d), true);
     }
+    const five = nextEmptyDates(5);
+    assert.equal(five.length, 5);
   });
 
-  it("export includes format and boxes array", () => {
+  it("export includes start_date and boxes array", () => {
     const payload = exportBoxesJson();
     assert.equal(payload.ok, true);
     assert.equal(payload.format, "365box-export-v1");
+    assert.equal(payload.start_date, START_DATE);
     assert.equal(payload.timezone, "Asia/Shanghai");
     assert.ok(Array.isArray(payload.boxes));
     assert.equal(payload.count, payload.boxes.length);

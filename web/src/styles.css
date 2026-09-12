@@ -114,6 +114,26 @@ h1 {
   align-items: center;
   gap: 10px;
   margin-bottom: 18px;
+  flex-wrap: wrap;
+}
+
+.yearNav {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.yearBtn {
+  border: 1px solid #d5cdc3;
+  background: #fff;
+  color: #292522;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+
+.yearBtn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
 }
 
 .year { font-family: Georgia, "Times New Roman", serif; font-size: 22px; font-weight: 500; }

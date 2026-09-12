@@ -21,7 +21,13 @@ import {
   nextEmptyDates,
   exportBoxesJson,
   nowDateString,
-  TARGET_YEAR
+  defaultDisplayYear,
+  startYear,
+  maxDisplayYear,
+  START_DATE,
+  MAX_YEAR_OFFSET,
+  NEXT_EMPTY_DEFAULT,
+  NEXT_EMPTY_MAX
 } from "./box.js";
 import { MCP_INSTRUCTIONS } from "./mcp-docs.js";
 import { nowBeijingISO } from "./time.js";
@@ -71,7 +77,8 @@ function errorMessage(error: unknown) {
   const code = errorCode(error);
   const messages: Record<string, string> = {
     INVALID_DATE: "日期格式必须是 YYYY-MM-DD，且必须是真实存在的日历日",
-    DATE_YEAR_INVALID: `只能创建 ${TARGET_YEAR} 年的盒子`,
+    DATE_BEFORE_START: `不能早于开放起点 ${START_DATE}`,
+    DATE_YEAR_INVALID: `不能早于开放起点 ${START_DATE}`,
     DATE_IN_PAST: "不能创建过去的日期",
     CONTENT_REQUIRED: "盒子内容不能为空",
     BOX_ALREADY_EXISTS: "这个日期已经有盒子了",
@@ -141,19 +148,33 @@ function requireAuth(
 }
 
 app.get("/api/health", (_req, res) => {
+  const today = nowDateString();
   res.json({
     ok: true,
-    today: nowDateString(),
+    today,
     now: nowBeijingISO(),
     timezone: "Asia/Shanghai",
     utc_offset: "+08:00",
-    year: TARGET_YEAR,
+    start_date: START_DATE,
+    year: defaultDisplayYear(today),
+    min_year: startYear(),
+    max_year: maxDisplayYear(today),
+    max_year_offset: MAX_YEAR_OFFSET,
     auth_required: Boolean(AUTH_TOKEN)
   });
 });
 
-app.get("/api/stats", requireAuth, (_req, res) => {
-  res.json(getStats());
+app.get("/api/stats", requireAuth, (req, res) => {
+  const raw = req.query.year;
+  const year =
+    raw === undefined || raw === ""
+      ? defaultDisplayYear()
+      : Number(raw);
+  if (!Number.isInteger(year) || year < 1) {
+    sendApiError(res, new Error("INVALID_DATE"));
+    return;
+  }
+  res.json(getStats(year));
 });
 
 app.get("/api/calendar", requireAuth, (req, res) => {
@@ -226,10 +247,10 @@ ${MCP_INSTRUCTIONS}
 
   server.tool(
     "create_box",
-    `往 ${TARGET_YEAR} 年今天或未来的空日期批量写入新盲盒。content=留言正文（必填）；prompt=可选创作方向/备注（不传也行，开盒时会原样返回，不影响解锁）。不能创建过去/非法日/非 ${TARGET_YEAR} 年；已有盒子不覆盖（改用 update_box）。出参 {results:[...]}，某条不合格只影响该条。`,
+    `往开放起点 ${START_DATE} 及之后、且不早于今天的空日期批量写入新盲盒。content=留言正文（必填）；prompt=可选创作方向/备注（不传也行，开盒时会原样返回，不影响解锁）。不能创建过去/非法日/早于 ${START_DATE}；已有盒子不覆盖（改用 update_box）。出参 {results:[...]}，某条不合格只影响该条。`,
     {
       boxes: z.array(z.object({
-        date: z.string().describe(`${TARGET_YEAR} 年今天或未来的真实日历日 YYYY-MM-DD，建议先 next_empty_dates`),
+        date: z.string().describe(`≥ ${START_DATE} 且 ≥ 今天的真实日历日 YYYY-MM-DD，建议先 next_empty_dates`),
         content: z.string().nullish().describe("留言正文，必填；给到日打开的人看；缺了只让该条失败"),
         prompt: z.string().optional().describe("可选创作方向/备注；不传完全可以；存库，开盒时随 content 返回，不参与解锁")
       })).min(1).describe("要新建的盒子列表")
@@ -330,7 +351,7 @@ ${MCP_INSTRUCTIONS}
 
   server.tool(
     "calendar_status",
-    `查看日期范围内有盒日期及 locked/opened（无正文）。成功 { ok:true, stats, year_stats, dates }；失败（如 start>end）{ ok:false, error, code }，不抛 Step error。stats=本次范围；year_stats=固定 ${TARGET_YEAR} 整年。`,
+    `查看日期范围内有盒日期及 locked/opened（无正文）。成功 { ok:true, stats, year_stats, dates }；失败（如 start>end）{ ok:false, error, code }，不抛 Step error。stats=本次查询范围；year_stats=start_date 所在年的统计（开放年起算）。`,
     {
       start_date: z.string().optional().describe("开始日期 YYYY-MM-DD，默认今天"),
       end_date: z.string().optional().describe("结束日期 YYYY-MM-DD，默认等于 start_date；须 ≥ start_date")
@@ -340,10 +361,11 @@ ${MCP_INSTRUCTIONS}
         const start = start_date ?? nowDateString();
         const end = end_date ?? start;
         const status = calendarStatus(start, end);
+        const year = Number(start.slice(0, 4));
         return textJson({
           ok: true as const,
           stats: getRangeStats(start, end),
-          year_stats: getStats(),
+          year_stats: getStats(year),
           dates: status
         });
       } catch (error) {
@@ -358,9 +380,10 @@ ${MCP_INSTRUCTIONS}
 
   server.tool(
     "next_empty_dates",
-    `列出 ${TARGET_YEAR} 年还能写入的空日期（已自动排除过去的日期和已有盒子的日期）。写盒子前先调用。不传 count 返回全部可写空位；传 count(1–365) 返回前 N 个。`,
+    `列出还能写入的空日期（从 max(今天, ${START_DATE}) 起往后；已排除已有盒子）。写盒子前先调用。不传 count 默认返回 ${NEXT_EMPTY_DEFAULT} 个；传 count(1–${NEXT_EMPTY_MAX}) 返回前 N 个。`,
     {
-      count: z.number().int().min(1).max(365).optional().describe("只要前 N 个空日期；不传=全部可写空位")
+      count: z.number().int().min(1).max(NEXT_EMPTY_MAX).optional()
+        .describe(`返回条数；不传默认 ${NEXT_EMPTY_DEFAULT}，最大 ${NEXT_EMPTY_MAX}`)
     },
     async ({ count }) => {
       const dates = nextEmptyDates(count);

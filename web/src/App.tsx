@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 
 type Status = {
   date: string;
@@ -34,7 +34,10 @@ type Health = {
   now?: string;
   timezone?: string;
   utc_offset?: string;
+  start_date?: string;
   year?: number;
+  min_year?: number;
+  max_year?: number;
   auth_required?: boolean;
 };
 
@@ -83,12 +86,15 @@ function authHeaders(token: string): HeadersInit {
 }
 
 export default function App() {
-  const [year, setYear] = useState(2027);
-  const days = useMemo(() => buildYearDays(year), [year]);
-  const calendarStart = `${year}-01-01`;
-  const calendarEnd = `${year}-12-31`;
+  const [year, setYear] = useState<number | null>(null);
+  const [minYear, setMinYear] = useState(2026);
+  const [maxYear, setMaxYear] = useState(2029);
+  const [startDate, setStartDate] = useState("2026-09-15");
+  const days = useMemo(() => (year == null ? [] : buildYearDays(year)), [year]);
+  const calendarStart = year == null ? "" : `${year}-01-01`;
+  const calendarEnd = year == null ? "" : `${year}-12-31`;
   const [statuses, setStatuses] = useState<Record<string, Status>>({});
-  const [stats, setStats] = useState<Stats>({ total: 0, locked: 0, opened: 0, empty: 365 });
+  const [stats, setStats] = useState<Stats>({ total: 0, locked: 0, opened: 0, empty: 0 });
   const [selected, setSelected] = useState<BoxResult | null>(null);
   const [confirmDate, setConfirmDate] = useState<string | null>(null);
   const [opening, setOpening] = useState(false);
@@ -105,7 +111,30 @@ export default function App() {
     days: days.filter(date => Number(date.slice(5, 7)) === index + 1)
   })), [days]);
 
-  async function load(nextToken = token, options?: { silent?: boolean }) {
+  async function loadYearData(viewYear: number, nextToken: string, silent: boolean) {
+    const start = `${viewYear}-01-01`;
+    const end = `${viewYear}-12-31`;
+    const headers = authHeaders(nextToken);
+
+    const [calendarRes, statsRes] = await Promise.all([
+      fetch(`/api/calendar?start=${start}&end=${end}`, { headers }),
+      fetch(`/api/stats?year=${viewYear}`, { headers })
+    ]);
+    if (calendarRes.status === 401 || statsRes.status === 401) {
+      throw new Error("token 无效或未提供");
+    }
+    if (!calendarRes.ok || !statsRes.ok) {
+      throw new Error("后端返回异常，请确认服务已启动");
+    }
+    const calendar: Status[] = await calendarRes.json();
+    const next: Record<string, Status> = {};
+    calendar.forEach(item => { next[item.date] = item; });
+    setStatuses(next);
+    setStats(await statsRes.json());
+    if (!silent) setLoading(false);
+  }
+
+  async function load(nextToken = token, options?: { silent?: boolean; keepYear?: boolean }) {
     const silent = Boolean(options?.silent);
     if (!silent) setLoading(true);
     setError(null);
@@ -113,38 +142,30 @@ export default function App() {
       const healthRes = await fetch("/api/health");
       if (!healthRes.ok) throw new Error("health failed");
       const health = await healthRes.json() as Health;
-      const nextYear = health.year ?? 2027;
-      setYear(nextYear);
-      setToday(health.today ?? "");
+      const todayStr = health.today ?? "";
+      setToday(todayStr);
       setNow(health.now ?? "");
       setAuthRequired(Boolean(health.auth_required));
+      if (health.start_date) setStartDate(health.start_date);
+      const nextMin = health.min_year ?? Number((health.start_date ?? "2026-09-15").slice(0, 4));
+      const nextMax = health.max_year ?? (Number(todayStr.slice(0, 4)) || nextMin) + 3;
+      setMinYear(nextMin);
+      setMaxYear(nextMax);
+
+      const defaultYear = health.year ?? Number(todayStr.slice(0, 4)) || nextMin;
+      const viewYear = options?.keepYear && year != null
+        ? Math.min(nextMax, Math.max(nextMin, year))
+        : Math.min(nextMax, Math.max(nextMin, defaultYear));
+      setYear(viewYear);
 
       if (health.auth_required && !nextToken.trim()) {
         setStatuses({});
-        setStats({ total: 0, locked: 0, opened: 0, empty: 365 });
+        setStats({ total: 0, locked: 0, opened: 0, empty: 0 });
         setError("服务已开启鉴权，请先填写访问 token。");
         return;
       }
 
-      const start = `${nextYear}-01-01`;
-      const end = `${nextYear}-12-31`;
-      const headers = authHeaders(nextToken);
-
-      const [calendarRes, statsRes] = await Promise.all([
-        fetch(`/api/calendar?start=${start}&end=${end}`, { headers }),
-        fetch("/api/stats", { headers })
-      ]);
-      if (calendarRes.status === 401 || statsRes.status === 401) {
-        throw new Error("token 无效或未提供");
-      }
-      if (!calendarRes.ok || !statsRes.ok) {
-        throw new Error("后端返回异常，请确认服务已启动");
-      }
-      const calendar: Status[] = await calendarRes.json();
-      const next: Record<string, Status> = {};
-      calendar.forEach(item => { next[item.date] = item; });
-      setStatuses(next);
-      setStats(await statsRes.json());
+      await loadYearData(viewYear, nextToken, silent);
     } catch (e) {
       setError(e instanceof Error ? e.message : "连不上后端。请先在项目根目录运行 npm run dev。");
       if (!silent) setStatuses({});
@@ -155,13 +176,48 @@ export default function App() {
 
   useEffect(() => {
     void load();
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- 仅首次拉取
   }, []);
+
+  const skipYearEffect = useRef(true);
+
+  useEffect(() => {
+    if (year == null) return;
+    if (skipYearEffect.current) {
+      skipYearEffect.current = false;
+      return;
+    }
+    if (authRequired && !token.trim()) return;
+    let cancelled = false;
+    (async () => {
+      setLoading(true);
+      setError(null);
+      try {
+        await loadYearData(year, token, false);
+      } catch (e) {
+        if (!cancelled) {
+          setError(e instanceof Error ? e.message : "加载日历失败");
+          setStatuses({});
+          setLoading(false);
+        }
+      }
+    })();
+    return () => { cancelled = true; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [year]);
 
   function saveToken() {
     const value = tokenDraft.trim();
     localStorage.setItem(TOKEN_KEY, value);
     setToken(value);
-    void load(value);
+    void load(value, { keepYear: true });
+  }
+
+  function changeYear(delta: number) {
+    if (year == null) return;
+    const next = year + delta;
+    if (next < minYear || next > maxYear) return;
+    setYear(next);
   }
 
   async function openBoxRequest(date: string) {
@@ -190,7 +246,13 @@ export default function App() {
           [date]: { date, status: "opened", has_box: true }
         }));
       }
-      await load(token, { silent: true });
+      if (year != null) {
+        try {
+          await loadYearData(year, token, true);
+        } catch {
+          /* 静默刷新失败不影响已打开内容 */
+        }
+      }
     } catch {
       setError("打开盒子失败，请检查后端是否在运行。");
       setConfirmDate(null);
@@ -235,7 +297,6 @@ export default function App() {
 
   const clockText = useMemo(() => {
     if (!now) return today ? `北京时间 ${today}` : "";
-    // now: 2026-09-12T12:29:51+08:00 → 2026-09-12 12:29:51
     const m = now.match(/^(\d{4}-\d{2}-\d{2})T(\d{2}:\d{2}:\d{2})/);
     if (!m) return `北京时间 ${now}`;
     return `北京时间 ${m[1]} ${m[2]}`;
@@ -249,6 +310,7 @@ export default function App() {
           <h1>写给未来的盲盒</h1>
           <p className="sub">每一天一个盒子。未来的留言，等日期自己把锁打开。</p>
           {clockText && <p className="timeMeta">{clockText}</p>}
+          {startDate && <p className="timeMeta">开放起点 {startDate}</p>}
         </div>
         <div className="stats">
           <span>已准备 <b>{stats.total}</b></span>
@@ -276,12 +338,30 @@ export default function App() {
       {error && (
         <section className="bannerError" role="alert">
           <span>{error}</span>
-          <button type="button" onClick={() => void load()}>重试</button>
+          <button type="button" onClick={() => void load(token, { keepYear: true })}>重试</button>
         </section>
       )}
 
       <section className="toolbar">
-        <strong className="year">{year} 年日历</strong>
+        <div className="yearNav">
+          <button
+            type="button"
+            className="yearBtn"
+            disabled={year == null || year <= minYear}
+            onClick={() => changeYear(-1)}
+          >
+            上一年
+          </button>
+          <strong className="year">{year ?? "—"} 年日历</strong>
+          <button
+            type="button"
+            className="yearBtn"
+            disabled={year == null || year >= maxYear}
+            onClick={() => changeYear(1)}
+          >
+            下一年
+          </button>
+        </div>
         <span className="range">{calendarStart} → {calendarEnd}</span>
       </section>
 
@@ -292,8 +372,8 @@ export default function App() {
         <span className="legendNote">网页仅可打开/查看近 7 天（今天及前 6 天）</span>
       </section>
 
-      <section className="calendar" aria-label={`${year} 年盲盒日历`}>
-        {loading ? <div className="loading">正在打开日历……</div> : months.map(month => {
+      <section className="calendar" aria-label={`${year ?? ""} 年盲盒日历`}>
+        {loading || year == null ? <div className="loading">正在打开日历……</div> : months.map(month => {
           const firstWeekday = mondayBasedWeekday(month.days[0]);
           return (
             <section className="month" key={month.number} aria-label={`${month.number} 月`}>
