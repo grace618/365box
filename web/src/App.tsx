@@ -17,6 +17,7 @@ type BoxResult = {
   prompt?: string | null;
   opened_at?: string | null;
   error?: string;
+  headline?: string;
 };
 
 type Stats = {
@@ -58,6 +59,22 @@ function buildYearDays(year: number) {
 function mondayBasedWeekday(date: string) {
   const [year, month, day] = date.split("-").map(Number);
   return (new Date(Date.UTC(year, month - 1, day)).getUTCDay() + 6) % 7;
+}
+
+/** 日历日加减（按 YYYY-MM-DD，与时区无关） */
+function shiftDate(date: string, deltaDays: number) {
+  const [year, month, day] = date.split("-").map(Number);
+  const next = new Date(Date.UTC(year, month - 1, day + deltaDays));
+  return `${next.getUTCFullYear()}-${pad2(next.getUTCMonth() + 1)}-${pad2(next.getUTCDate())}`;
+}
+
+/** 网页只能打开：今天 + 前 6 天（共 7 天，北京时间「今天」） */
+const WEB_OPEN_LOOKBACK_DAYS = 6;
+
+function isWithinWebOpenWindow(date: string, today: string) {
+  if (!today) return false;
+  const earliest = shiftDate(today, -WEB_OPEN_LOOKBACK_DAYS);
+  return date >= earliest && date <= today;
 }
 
 function authHeaders(token: string): HeadersInit {
@@ -184,11 +201,36 @@ export default function App() {
 
   function open(date: string) {
     const status = statuses[date];
-    if (status?.status !== "opened") {
-      setConfirmDate(date);
+    if (!status?.has_box) return;
+
+    // 未到解锁日
+    if (today && date > today) {
+      setSelected({
+        exists: true,
+        locked: true,
+        date,
+        unlock_at: `${date}T00:00:00+08:00`
+      });
       return;
     }
-    void openBoxRequest(date);
+
+    // 网页：仅今天及前 6 天可打开/查看（含已开启）
+    if (!isWithinWebOpenWindow(date, today)) {
+      setSelected({
+        exists: true,
+        date,
+        headline: "已超出可打开范围",
+        error: "网页只能打开或查看今天及前 6 天的盒子（共 7 天）。"
+      });
+      return;
+    }
+
+    if (status.status === "opened") {
+      void openBoxRequest(date);
+      return;
+    }
+
+    setConfirmDate(date);
   }
 
   const clockText = useMemo(() => {
@@ -247,6 +289,7 @@ export default function App() {
         <span><i className="dot empty" /> 空盒</span>
         <span><i className="dot locked" /> 已写入 · 未开启</span>
         <span><i className="dot opened" /> 已开启</span>
+        <span className="legendNote">网页仅可打开/查看近 7 天（今天及前 6 天）</span>
       </section>
 
       <section className="calendar" aria-label={`${year} 年盲盒日历`}>
@@ -263,12 +306,21 @@ export default function App() {
                 {Array.from({ length: firstWeekday }, (_, index) => <span className="blank" key={`blank-${index}`} />)}
                 {month.days.map(date => {
                   const status = statuses[date];
+                  const canOpenOnWeb = isWithinWebOpenWindow(date, today);
                   return (
                     <button
                       key={date}
                       className={["day", status?.has_box ? (status.status === "opened" ? "opened" : "locked") : "empty"].join(" ")}
                       onClick={() => status?.has_box && open(date)}
-                      title={status?.has_box ? "点击打开" : "这个日期还没有盒子"}
+                      title={
+                        !status?.has_box
+                          ? "这个日期还没有盒子"
+                          : today && date > today
+                            ? "点击打开"
+                            : canOpenOnWeb
+                              ? (status.status === "opened" ? "点击查看" : "点击打开")
+                              : "超出网页可打开范围（近 7 天）"
+                      }
                     >
                       <strong>{date.slice(8)}</strong>
                       <span>{status?.has_box ? (status.status === "opened" ? "🎁" : "🔒") : "＋"}</span>
@@ -307,7 +359,7 @@ export default function App() {
             {selected.error ? (
               <>
                 <div className="bigIcon">⚠️</div>
-                <h2>打不开</h2>
+                <h2>{selected.headline ?? "打不开"}</h2>
                 <p>{selected.date}</p>
                 <div className="notice">{selected.error}</div>
               </>

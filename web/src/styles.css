@@ -121,10 +121,17 @@ h1 {
 
 .legend {
   display: flex;
+  flex-wrap: wrap;
   gap: 18px;
   color: #817970;
   font-size: 12px;
   margin-bottom: 15px;
+  align-items: center;
+}
+
+.legendNote {
+  margin-left: auto;
+  color: #9a9188;
 }
 
 .dot {
